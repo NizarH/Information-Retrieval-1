@@ -1,0 +1,9 @@
+van 3:
+kim: tf-idf
+nizar: bm25
+guido: qll
+
+van 4:
+kim: Precision and recall
+nizar: Expected reciprocal rank
+guido:  mean average precision
