@@ -1,0 +1,6 @@
+name: ir1-hw1
+dependencies:
+  - python=3.6   # or 2.7
+  - nltk=3.4.*
+  - numpy=1.18.*
+  - matplotlib
