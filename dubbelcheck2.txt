@@ -1,5 +1,0 @@
-
-theta = [[2**(0 if doc_id not in relevant_docs else max_g) - 1.0) / 2 **(max_g) for doc_id, _ in results]
-
-for rank, result in enumerate(results):
-  Err_k = 1/(rank+1.0) * theta[rank] * theta_last
