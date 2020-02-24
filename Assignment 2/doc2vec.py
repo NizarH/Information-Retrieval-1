@@ -17,8 +17,8 @@ docs_by_id = read_ap.get_processed_docs()
 
 
 def divide_test_train(docs, doc_train="train_docs", doc_test="test_docs"):
-    path_train = f"./{doc_train}.pkl"
-    path_test = f"./{doc_test}.pkl"
+    path_train = f"./pickles/{doc_train}.pkl"
+    path_test = f"./pickles/{doc_test}.pkl"
 
     if not os.path.exists(path_train) or not os.path.exists(path_test):
 
@@ -59,13 +59,28 @@ train_docs, test_docs = divide_test_train(docs_by_id)
 
 train_corpus = list(read_corpus(train_docs))
 test_corpus = list(read_corpus(test_docs, tokens_only=True))
-print(train_corpus[:2])
+pprint(train_corpus[:2])
 print(test_corpus[:2])
 
 
-# model = gensim.models.doc2vec.Doc2Vec(vector_size=50, min_count=50, epochs=20)
-# model.build_vocab(train_corpus)
-# model.train(train_corpus, total_examples=model.corpus_count, epochs=model.epochs)
+model = gensim.models.doc2vec.Doc2Vec(vector_size=50, min_count=50, epochs=10)
+model.build_vocab(train_corpus)
+model.train(train_corpus, total_examples=model.corpus_count, epochs=model.epochs)
+
+vector = model.infer_vector(read_ap.process_text('president ronald reagan flew to kuwait for diplomatic meeting'))
+print(vector)
+
+
+# ranks = []
+# second_ranks = []
+# for doc_id in range(len(train_corpus)):
+#     inferred_vector = model.infer_vector(train_corpus[doc_id].words)
+#     sims = model.docvecs.most_similar([inferred_vector], topn=len(model.docvecs))
+#     rank = [docid for docid, sim in sims].index(doc_id)
+#     ranks.append(rank)
+#
+#     second_ranks.append(sims[1])
+
 
 # read in the qrels
 qrels, queries = read_ap.read_qrels()

@@ -24,7 +24,7 @@ class TfIdfRetrieval:
 
     def __init__(self, docs):
 
-        index_path = "./tfidf_index"
+        index_path = "./pickles/tfidf_index"
         if os.path.exists(index_path):
 
             with open(index_path, "rb") as reader:

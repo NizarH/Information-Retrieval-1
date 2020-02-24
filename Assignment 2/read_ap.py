@@ -99,7 +99,7 @@ def read_ap_docs(root_folder="./datasets/"):
 
 def get_processed_docs(doc_set_name="processed_docs"):
 
-    path = f"./{doc_set_name}.pkl"
+    path = f"./pickles/{doc_set_name}.pkl"
 
     if not os.path.exists(path):
         docs, doc_ids = read_ap_docs()
