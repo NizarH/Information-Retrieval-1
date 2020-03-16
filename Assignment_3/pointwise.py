@@ -7,7 +7,9 @@ from tqdm import tqdm
 from torch.autograd import Variable
 import torch.nn.functional as F
 import torch.optim as optim
+import torch.nn.init as init
 import numpy as np
+import copy
 import matplotlib.pyplot as plt
 
 # fix random seed for reproducibility
@@ -16,7 +18,7 @@ torch.manual_seed(0)
 # Sets hyper-parameters
 DIM_HIDDEN = 256  # Dimensions of the hidden layer
 DIM_OUTPUT = 5  # Dimension of the output layer (number of labels)
-NUM_LAYERS = 1
+NUM_LAYERS = 2
 LR = 0.001  # Learning rate
 BATCH_SIZE = 32  # Batch size
 NUM_EPOCHS = 10  # Number of epochs
@@ -24,15 +26,20 @@ NUM_EPOCHS = 10  # Number of epochs
 
 class Net(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_layers, dropout=0.1):
+        """
+        Neural net with number of layers defined by user input. Uses dropout to prevent overfitting and relu as activation.
+        """
         super(Net, self).__init__()
-        self.layers = nn.ModuleList([nn.Linear(input_size, hidden_size)])   # input layer
+        self.layers = nn.ModuleList()   # input layer
         for layer in range(num_layers):     # add as many layers as num_layers
+            if layer != 0:
+                input_size = copy.copy(hidden_size)
+                hidden_size = input_size // 2
             self.layers.append(nn.Sequential(   # make sequential of linear, dropout, relu
-                nn.Linear(hidden_size, hidden_size // 2),
+                nn.Linear(input_size, hidden_size),
                 nn.Dropout(dropout),
                 nn.ReLU(),
             ))
-            hidden_size = hidden_size // 2  # divide hidden nodes by 2
         self.layers.append(nn.Linear(hidden_size, output_size))     # output layer
         self.name = 'Pointwise LTR Model'
 
@@ -41,24 +48,34 @@ class Net(nn.Module):
             x = layer(x)
         return x
 
-    def output_softmax(self, output):
-        return F.softmax(output, dim=1)     # convert output to probabilities with softmax
 
-    def highest_score(self, output):
-        # get index with highest probability
-        highest = []
-        for score in output:
-            np_score = score.detach().squeeze().tolist()    # convert to python list
-            print(np_score)
-            max_score = np_score[np_score.index(max(np_score))]     # get highest probability
-            highest.append(max_score)
-        print(highest)
-        return torch.tensor(highest)
+def softmax_highest_score(output):
+    """
+    Function that converts output into probabilities and chooses the score with highest probability
+    """
+    # get probabilities from scores
+    probs_scores = F.softmax(output, dim=1)
+    # get index with highest probability
+    highest = []
+    for score_prob, score_output in zip(probs_scores, output):
+        np_score_prob = score_prob.detach().squeeze().tolist()    # convert to python list
+        np_score_output = score_output.detach().squeeze().tolist()    # convert to python list
+        index_high_score = np_score_prob.index(max(np_score_prob))  # index highest probability
+        high_score = np_score_output[index_high_score]     # get value with highest probability
+        highest.append(high_score)
+    return np.array(highest)
+
+
+def weights_init(model):
+    if isinstance(model, nn.Linear):
+        nn.init.xavier_normal_(model.weight)
+        model.bias.data.zero_()
 
 
 def model_train(model, data, optimizer, criterion):
     model.train()
     loss_list = []
+    ndcg_list = []
     for epoch in range(NUM_EPOCHS):
         for i in tqdm(range(0, len(data.train.feature_matrix), BATCH_SIZE), position=0, leave=True):
             X = Variable(
@@ -70,21 +87,18 @@ def model_train(model, data, optimizer, criterion):
             loss = criterion(y_pred, Y)     # calculate loss
             loss.backward()     # backpropagate loss
             optimizer.step()    # update weights
-        loss_list.append(loss)      # append loss to list to plot
-        print("Output: ", y_pred)   # print predicted output
-        print("Sum output: ", np.sum(y_pred.detach().numpy()))
         print("Epoch {} - loss: {}".format(epoch, loss.item()))     # print loss
-        
-        ### evaluation of scores doesnt work yet
-        # if epoch % 5 == 0:
-        # print("validation ndcg at epoch " + str(epoch))
-        # model.eval()
-        # validation_data = Variable(torch.tensor(data.validation.feature_matrix, dtype=torch.float, requires_grad=False))
-        # validation_y_pred = model(validation_data)
-        # validation_scores = model.highest_score(model.output_softmax(validation_y_pred))
-        # results = eval.evaluate(data.validation, validation_scores, print_results=False)
-        # print(results["ndcg"])
-    return model, optimizer, loss, loss_list
+
+        # if epoch % 2 == 0:  # print performance of model on validation data
+        loss_list.append(loss)  # append loss to list to plot
+        print("validation ndcg at epoch " + str(epoch))
+        model.eval()
+        validation_data = Variable(torch.tensor(data.validation.feature_matrix, dtype=torch.float, requires_grad=False))
+        validation_y_pred = model(validation_data)
+        validation_scores = softmax_highest_score(validation_y_pred)
+        results = eval.evaluate(data.validation, validation_scores, print_results=True)
+        ndcg_list.append(results["ndcg"][0])
+    return model, optimizer, loss, loss_list, ndcg_list
 
 
 def save_model(model, epochs, optimizer, loss, lr, activ, optim):
@@ -110,11 +124,21 @@ def load_model(model, optimizer):
 
 def plot_loss(loss, epochs, batch, activ, optim, lr):
     # plot cross entropy loss in graph
-    plt.plot(loss)
-    plt.xlabel('Number of iterations')
+    plt.plot(loss, label='CE loss')
+    plt.xlabel('Number of epochs')
     plt.ylabel('Cross Entropy Loss')
     plt.title('Loss for {} epochs'.format(epochs))
     plt.savefig('plots/loss_pointwise_epochs={}_batch={}_LR={}_{}_{}.png'.format(epochs, batch, lr, activ, optim))
+    plt.show()
+
+
+def plot_ndcg(ndcg, epochs, batch, activ, optim, lr):
+    # plot ndcg in graph
+    plt.plot(ndcg, label='NDCG')
+    plt.xlabel('Number of epochs')
+    plt.ylabel('Mean NDCG')
+    plt.title('Mean NDCG for {} epochs'.format(epochs))
+    plt.savefig('plots/ndcg_pointwise_epochs={}_batch={}_LR={}_{}_{}.png'.format(epochs, batch, lr, activ, optim))
     plt.show()
 
 
@@ -123,11 +147,14 @@ if __name__ == "__main__":
     data.read_data()
     # initialize model
     net = Net(data.num_features, DIM_HIDDEN, DIM_OUTPUT, NUM_LAYERS)
-    optimizer = optim.SGD(net.parameters(), lr=LR, momentum=0.5)
-    # optimizer = optim.Adam(net.parameters(), lr=LR, betas=(0.9, 0.999))
+    net.apply(weights_init)
+    # optimizer = optim.SGD(net.parameters(), lr=LR, momentum=0.5)
+    optimizer = optim.Adam(net.parameters(), lr=LR)
     optim_str = optimizer.__str__()[0:3]
+    # define loss function
     criterion = nn.CrossEntropyLoss()
-    model, optimizer, loss, loss_list = model_train(net, data, optimizer, criterion)
+    model, optimizer, loss, loss_list, ndcg_list = model_train(net, data, optimizer, criterion)
     plot_loss(loss_list, NUM_EPOCHS, BATCH_SIZE, 'ReLu', optim_str, LR)
-    # save_model(model, NUM_EPOCHS, optimizer, loss, LR, 'ReLu', 'Adam')
+    plot_ndcg(ndcg_list, NUM_EPOCHS, BATCH_SIZE, 'ReLu', optim_str, LR)
+    save_model(model, NUM_EPOCHS, optimizer, loss, LR, 'ReLu', 'Adam')
     # model, optimizer, checkpoint, epochs, loss = load_model(net, optimizer)
