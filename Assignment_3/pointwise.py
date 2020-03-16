@@ -20,8 +20,7 @@ DIM_HIDDEN = 256  # Dimensions of the hidden layer
 DIM_OUTPUT = 5  # Dimension of the output layer (number of labels)
 NUM_LAYERS = 2
 LR = 0.001  # Learning rate
-BATCH_SIZE = 32  # Batch size
-NUM_EPOCHS = 10  # Number of epochs
+NUM_EPOCHS = 100  # Number of epochs
 
 
 class Net(nn.Module):
@@ -74,30 +73,30 @@ def weights_init(model):
 
 def model_train(model, data, optimizer, criterion):
     model.train()
+
     loss_list = []
     ndcg_list = []
+
+    X = torch.tensor(data.train.feature_matrix, dtype=torch.float, requires_grad=False)  # gets input
+    Y = torch.tensor(data.train.label_vector, requires_grad=False)  # gets correct output
+    validation_data = torch.tensor(data.validation.feature_matrix, dtype=torch.float, requires_grad=False)
+
     for epoch in range(NUM_EPOCHS):
-        for i in tqdm(range(0, len(data.train.feature_matrix), BATCH_SIZE), position=0, leave=True):
-            X = Variable(
-                torch.tensor(data.train.feature_matrix[i: i + BATCH_SIZE], dtype=torch.float, requires_grad=False))  # gets input
-            Y = Variable(
-                torch.tensor(data.train.label_vector[i: i + BATCH_SIZE], requires_grad=False))  # gets correct output
-            optimizer.zero_grad()   # set gradients to zero
-            y_pred = model(X)   # predict labels
-            loss = criterion(y_pred, Y)     # calculate loss
-            loss.backward()     # backpropagate loss
-            optimizer.step()    # update weights
+        optimizer.zero_grad()   # set gradients to zero
+        y_pred = model(X)   # predict labels
+        loss = criterion(y_pred, Y)     # calculate loss
+        loss.backward()     # backpropagate loss
+        optimizer.step()    # update weights
         print("Epoch {} - loss: {}".format(epoch, loss.item()))     # print loss
 
-        # if epoch % 2 == 0:  # print performance of model on validation data
-        loss_list.append(loss)  # append loss to list to plot
-        print("validation ndcg at epoch " + str(epoch))
-        model.eval()
-        validation_data = Variable(torch.tensor(data.validation.feature_matrix, dtype=torch.float, requires_grad=False))
-        validation_y_pred = model(validation_data)
-        validation_scores = softmax_highest_score(validation_y_pred)
-        results = eval.evaluate(data.validation, validation_scores, print_results=True)
-        ndcg_list.append(results["ndcg"][0])
+        if epoch % 5 == 0:  # print performance of model on validation data
+            loss_list.append(loss)  # append loss to list to plot
+            print("validation ndcg at epoch " + str(epoch))
+            model.eval()
+            validation_y_pred = model(validation_data)
+            validation_scores = softmax_highest_score(validation_y_pred)
+            results = eval.evaluate(data.validation, validation_scores, print_results=True)
+            ndcg_list.append(results["ndcg"][0])
     return model, optimizer, loss, loss_list, ndcg_list
 
 
@@ -122,23 +121,23 @@ def load_model(model, optimizer):
     return model, optimizer, checkpoint, epochs, loss
 
 
-def plot_loss(loss, epochs, batch, activ, optim, lr):
+def plot_loss(loss, epochs, activ, optim, lr):
     # plot cross entropy loss in graph
-    plt.plot(loss, label='CE loss')
+    plt.plot(loss, label='CE loss', color='blue')
     plt.xlabel('Number of epochs')
     plt.ylabel('Cross Entropy Loss')
     plt.title('Loss for {} epochs'.format(epochs))
-    plt.savefig('plots/loss_pointwise_epochs={}_batch={}_LR={}_{}_{}.png'.format(epochs, batch, lr, activ, optim))
+    plt.savefig('plots/loss_pointwise_epochs={}_LR={}_{}_{}.png'.format(epochs, lr, activ, optim))
     plt.show()
 
 
-def plot_ndcg(ndcg, epochs, batch, activ, optim, lr):
+def plot_ndcg(ndcg, epochs, activ, optim, lr):
     # plot ndcg in graph
-    plt.plot(ndcg, label='NDCG')
+    plt.plot(ndcg, label='NDCG', color='orange')
     plt.xlabel('Number of epochs')
-    plt.ylabel('Mean NDCG')
-    plt.title('Mean NDCG for {} epochs'.format(epochs))
-    plt.savefig('plots/ndcg_pointwise_epochs={}_batch={}_LR={}_{}_{}.png'.format(epochs, batch, lr, activ, optim))
+    plt.ylabel('NDCG')
+    plt.title('NDCG for {} epochs'.format(epochs))
+    plt.savefig('plots/ndcg_pointwise_epochs={}_LR={}_{}_{}.png'.format(epochs, lr, activ, optim))
     plt.show()
 
 
@@ -154,7 +153,7 @@ if __name__ == "__main__":
     # define loss function
     criterion = nn.CrossEntropyLoss()
     model, optimizer, loss, loss_list, ndcg_list = model_train(net, data, optimizer, criterion)
-    plot_loss(loss_list, NUM_EPOCHS, BATCH_SIZE, 'ReLu', optim_str, LR)
-    plot_ndcg(ndcg_list, NUM_EPOCHS, BATCH_SIZE, 'ReLu', optim_str, LR)
-    save_model(model, NUM_EPOCHS, optimizer, loss, LR, 'ReLu', 'Adam')
+    plot_loss(loss_list, NUM_EPOCHS, 'ReLu', optim_str, LR)
+    plot_ndcg(ndcg_list, NUM_EPOCHS, 'ReLu', optim_str, LR)
+    save_model(model, NUM_EPOCHS, optimizer, loss, LR, 'ReLu', optim_str)
     # model, optimizer, checkpoint, epochs, loss = load_model(net, optimizer)
