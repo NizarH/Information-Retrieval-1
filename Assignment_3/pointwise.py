@@ -6,6 +6,7 @@ import torch.nn as nn
 from tqdm import tqdm
 import torch.nn.functional as F
 import torch.optim as optim
+from pytorchtools import EarlyStopping
 import numpy as np
 import copy
 import matplotlib.pyplot as plt
@@ -18,9 +19,11 @@ torch.manual_seed(0)
 # Sets hyper-parameters
 DIM_HIDDEN = 128  # Dimensions of the hidden layer
 DIM_OUTPUT = 5  # Dimension of the output layer (number of labels)
-NUM_LAYERS = 2
-LR = 0.01  # Learning rate
-NUM_EPOCHS = 20  # Number of epochs
+NUM_LAYERS = 4
+LR = 0.0001  # Learning rate
+MOMENTUM = 0.3  # Momentum for SGD
+DROPOUT = 0.3   # Dropout
+NUM_EPOCHS = 100  # Number of epochs
 
 
 class Net(nn.Module):
@@ -72,13 +75,15 @@ def softmax_highest_score(output):
     probs_scores = F.softmax(output, dim=1)
     # get index with highest probability
     highest = []
+    highest_index = []
     for score_prob, score_output in zip(probs_scores, output):
         np_score_prob = score_prob.detach().squeeze().tolist()  # convert to python list
         np_score_output = score_output.detach().squeeze().tolist()  # convert to python list
         index_high_score = np_score_prob.index(max(np_score_prob))  # index highest probability
         high_score = np_score_output[index_high_score]  # get value with highest probability
         highest.append(high_score)
-    return np.array(highest)
+        highest_index.append(index_high_score)
+    return np.array(highest), np.array(highest_index)
 
 
 def weights_init(model):
@@ -87,93 +92,130 @@ def weights_init(model):
         model.bias.data.zero_()
 
 
-def model_train(model, data, optimizer, criterion):
+def model_train(model, data, optimizer, criterion, epochs=NUM_EPOCHS, patience=5):
     model.train()
 
-    loss_list = []
+    train_losses = []
+    valid_losses = []
     ndcg_list = []
 
     X = torch.tensor(data.train.feature_matrix, dtype=torch.float, requires_grad=False)  # gets input
     Y = torch.tensor(data.train.label_vector, requires_grad=False)  # gets correct output
-    validation_data = torch.tensor(data.validation.feature_matrix, dtype=torch.float, requires_grad=False)
+    validation_data = torch.tensor(data.validation.feature_matrix, dtype=torch.float, requires_grad=False)  # validation input
+    validation_target = torch.tensor(data.validation.label_vector, requires_grad=False) # validation correct output
 
-    for epoch in tqdm(range(NUM_EPOCHS), position=0, leave=True):
+    # initialize the early_stopping object
+    early_stopping = EarlyStopping(patience=patience, verbose=True, delta=0.0001)
+
+    for epoch in tqdm(range(epochs), position=0, leave=True):
         optimizer.zero_grad()  # set gradients to zero
         y_pred = model(X)  # predict labels
         loss = criterion(y_pred, Y)  # calculate loss
         loss.backward()  # backpropagate loss
         optimizer.step()  # update weights
-        print("Epoch {} - loss: {}".format(epoch, loss.item()))  # print loss
+        train_losses.append(loss.item())  # append loss to list to plot
 
-        # if epoch % 5 == 0:  # print performance of model on validation data
-        loss_list.append(loss)  # append loss to list to plot
         print("validation ndcg at epoch " + str(epoch))
         model.eval()
         validation_y_pred = model(validation_data)
-        validation_scores = softmax_highest_score(validation_y_pred)
+        validation_scores, validation_indexes = softmax_highest_score(validation_y_pred)
+        # calculate the loss
+        valid_loss = criterion(validation_y_pred, validation_target)
+        # record validation loss
+        valid_losses.append(valid_loss.item())
         results = eval.evaluate(data.validation, validation_scores, print_results=False)
-        ndcg_list.append(results["ndcg"][0])
-        print('ndcg: ', results["ndcg"])
-    return model, optimizer, loss, loss_list, ndcg_list
+        ndcg_list.append(results['ndcg']['mean'])
+        # print('ndcg: ', results["ndcg"])
+        print("Epoch {} - train loss: {} - validation loss: {}".format(epoch, loss.item(), valid_loss.item()))  # print loss
+
+        if epoch % 5 == 0:  # print performance of model on validation data
+            epoch_len = len(str(epochs))
+            print_msg = (f'[{epoch:>{epoch_len}}/{epochs:>{epoch_len}}] ' +
+                         f'train_loss: {loss.item():.5f} ' +
+                         f'valid_loss: {valid_loss.item():.5f}')
+            print(print_msg)
+
+        # early_stopping checks if validation loss has decresed
+        early_stopping(valid_loss.item(), model)
+
+        if early_stopping.early_stop:
+            print("Early stopping")
+            break
+
+    # load the last checkpoint with the best model
+    model.load_state_dict(torch.load('models/checkpoint.pt'))
+
+    return model, optimizer, train_losses, valid_losses, ndcg_list, validation_indexes
 
 
-def tune_params(model, data, criterion):
-    # epochs = [10, 20, 30, 50, 80, 100]
-    best_str = 'learning rate'
-    lrs = [0.1, 0.01, 0.001, 0.0001, 0.00001]
+def tune_params(data, criterion):
+    ltr_type = 'pairwise'
+    epochs = [10, 20, 30, 50, 80, 100, 150]
+    best_str = 'number of epochs'
+    str_file = 'numepochs'
+    # lrs = [0.1, 0.01, 0.001, 0.0001, 0.00001]
     # layers = [1, 2, 3, 4, 5]
     # nodes = [256, 128, 64, 32, 16]
-    # sigmas = [1]
+    # momentums = np.random.uniform(0.1, 0.9, size=5)
+    # sigmas = [0.1, 0.5, 1, 2, 5]
     # dropouts = [0.1, 0.2, 0.3, 0.4]
-    # pairs = [2000]
+    # pairs = [100, 500, 1000, 2000, 5000]
     ndcg_scores = {}
     # best_params = {}
-    for lr in lrs:
-        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
-        model, optimizer, loss, loss_list, ndcg_list = model_train(model, data, optimizer, criterion)
+    for numepochs in epochs:
+        model = Net(data.num_features, DIM_HIDDEN, DIM_OUTPUT, NUM_LAYERS)
+        model.apply(weights_init)
+        optimizer = optim.SGD(model.parameters(), lr=LR, momentum=MOMENTUM)
+        model, optimizer, loss, train_loss, valid_loss, ndcg_list = model_train(model, data, optimizer, criterion)
         optim_str = optimizer.__str__()[0:3]
         mean_ndcg = np.mean(ndcg_list)
         print('mean ndcg', mean_ndcg)
-        ndcg_scores['Epochs={}'.format(lr)] = mean_ndcg
-        plot_loss(loss_list, '{}='.format(best_str) + str(lr), 'ReLu', optim_str, lr)
-        plot_ndcg(ndcg_list, '{}='.format(best_str) + str(lr), 'ReLu', optim_str, lr)
+        ndcg_scores['{}={}'.format(str_file, numepochs)] = mean_ndcg
+        plot_loss(valid_loss, '{}='.format(best_str) + str(numepochs), 'ReLu', optim_str, LR)
+        plot_ndcg(ndcg_list, '{}='.format(best_str) + str(numepochs), 'ReLu', optim_str, LR)
 
     best_key = max(ndcg_scores.items(), key=operator.itemgetter(1))[0]
-    # best_params['Best {}'.format(best_str)] = best_key
 
     hyperparams = {'NDCG for {}'.format(best_str): ndcg_scores}
-    filename = 'results_hyperparams/learningrate_optim={}_activ=ReLU_loss=CE.json'.format(optim_str)
-    with open(filename, 'w') as outfile:
-        json.dump(hyperparams, outfile)
+    filename = 'hyperparams_{}/{}_optim={}_activ=ReLU_loss=CE.json'.format(ltr_type, str_file, optim_str)
+    save_to_json(filename, hyperparams)
 
-    filename_best = 'results_hyperparams/best_hyperparameters_optim=SGD_activ=ReLU_loss=CE.json'
+    filename_best = 'hyperparams_{}/best_hyperparameters_optim=SGD_activ=ReLU_loss=CE.json'.format(ltr_type)
     with open(filename_best, 'r') as f:
         best_params = json.load(f)
         best_params['Best {}'.format(best_str)] = best_key
 
-    with open(filename_best, 'w') as f:
-        json.dump(best_params, f, indent=4)
+    save_to_json(filename_best, best_params)
 
 
-def save_model(model, epochs, optimizer, loss, lr, activ, optim):
+def save_model(model, epochs, optimizer, valid_loss, ndcg_list, valid_indexes, lr, activ, optim):
     # save model, optimizer, loss to tar file
     torch.save({
         'epoch': epochs,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'loss': loss
-    }, 'models/pointwise_ltr_eps={}_LR={}_{}_{}.pth.tar'.format(epochs, lr, activ, optim))
+        'validaton_loss': valid_loss,
+        'ndcg_list': ndcg_list,
+        'validation_indexes': valid_indexes,
+    }, 'models/pointwise_ltr_tuned_eps={}_LR={}_{}_{}.pth.tar'.format(epochs, lr, activ, optim))
 
 
-def load_model(model, optimizer):
+def load_model(model, optimizer, file):
     # load model from tar file
-    checkpoint = torch.load('models/pointwise_ltr.pth.tar')
+    checkpoint = torch.load(file)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     epochs = checkpoint['epoch']
-    loss = checkpoint['loss']
+    loss = checkpoint['validaton_loss']
+    ndcg = checkpoint['ndcg_list']
+    valid_index = checkpoint['validation_indexes']
     model.eval()
-    return model, optimizer, checkpoint, epochs, loss
+    return model, optimizer, checkpoint, epochs, loss, ndcg, valid_index
+
+
+def save_to_json(filename, data, indent=4):
+    with open(filename, 'w') as outfile:
+        json.dump(data, outfile, indent=indent)
 
 
 def plot_loss(loss, text, activ, optim, lr):
@@ -182,7 +224,7 @@ def plot_loss(loss, text, activ, optim, lr):
     plt.xlabel('Number of epochs')
     plt.ylabel('Cross Entropy Loss')
     plt.title('Loss for {}'.format(text))
-    plt.savefig('plots/loss_pointwise_epochs={}_LR={}_{}_{}.png'.format(NUM_EPOCHS, lr, activ, optim))
+    plt.savefig('plots/validationloss_pointwise_tuned_epochs={}_LR={}_{}_{}.png'.format(NUM_EPOCHS, lr, activ, optim))
     plt.show()
 
 
@@ -192,8 +234,27 @@ def plot_ndcg(ndcg, text, activ, optim, lr):
     plt.xlabel('Number of epochs')
     plt.ylabel('NDCG')
     plt.title('NDCG for {}'.format(text))
-    plt.savefig('plots/ndcg_pointwise_epochs={}_LR={}_{}_{}.png'.format(NUM_EPOCHS, lr, activ, optim))
+    plt.savefig('plots/validationndcg_pointwise_tuned_epochs={}_LR={}_{}_{}.png'.format(NUM_EPOCHS, lr, activ, optim))
     plt.show()
+
+
+def plot_earlystop(train_loss, valid_loss):
+    # visualize the loss as the network trained
+    fig = plt.figure(figsize=(10, 8))
+    plt.plot(train_loss, label='Training Loss')
+    plt.plot(valid_loss, label='Validation Loss')
+
+    # find position of lowest validation loss
+    minposs = valid_loss.index(min(valid_loss)) + 1
+    plt.axvline(minposs, linestyle='--', color='r', label='Early Stopping Checkpoint')
+
+    plt.xlabel('epochs')
+    plt.ylabel('loss')
+    plt.xlim(0, len(train_loss) + 1)  # consistent scale
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+    fig.savefig('plots/loss_plot.png', bbox_inches='tight')
 
 
 if __name__ == "__main__":
@@ -202,14 +263,36 @@ if __name__ == "__main__":
     # initialize model
     net = Net(data.num_features, DIM_HIDDEN, DIM_OUTPUT, NUM_LAYERS)
     net.apply(weights_init)
-    # optimizer = optim.SGD(net.parameters(), lr=LR, momentum=0.9)
-    # optimizer = optim.Adam(net.parameters(), lr=LR)
-    # optim_str = optimizer.__str__()[0:3]
+    # # optimizer = optim.SGD(net.parameters(), lr=LR, momentum=MOMENTUM)
+    optimizer = optim.Adam(net.parameters(), lr=LR)
+    optim_str = optimizer.__str__()[0:3]
     # define loss function
     criterion = nn.CrossEntropyLoss()
-    tune_params(net, data, criterion)
-    # model, optimizer, loss, loss_list, ndcg_list = model_train(net, data, optimizer, criterion)
-    # plot_loss(loss_list, NUM_EPOCHS, 'ReLu', optim_str, LR)
+    # tune_params(data, criterion)
+    # model, optimizer, train_loss, valid_loss, ndcg_list, valid_indexes = model_train(net, data, optimizer, criterion)
+    # plot_loss(valid_loss, NUM_EPOCHS, 'ReLu', optim_str, LR)
     # plot_ndcg(ndcg_list, NUM_EPOCHS, 'ReLu', optim_str, LR)
-    # save_model(model, NUM_EPOCHS, optimizer, loss, LR, 'ReLu', optim_str)
-    # model, optimizer, checkpoint, epochs, loss = load_model(net, optimizer)
+    # plot_earlystop(train_loss, valid_loss)
+    #
+    # save_model(model, NUM_EPOCHS, optimizer, valid_loss, ndcg_list, valid_indexes, LR, 'ReLu', optim_str)
+    file_load = 'models/pointwise_ltr_tuned_eps=100_LR=0.0001_ReLu_Ada.pth.tar'
+    model, optimizer, checkpoint, epochs, loss, ndcg, valid_index = load_model(net, optimizer, file_load)
+    plt.hist(np.array(valid_index), bins=30, color='purple')
+    plt.show()
+
+    test_data = torch.tensor(data.test.feature_matrix, dtype=torch.float, requires_grad=False)  # test input
+    test_target = torch.tensor(data.test.label_vector, requires_grad=False)  # test correct output
+    plt.hist(np.array(test_target), bins=50, color='orange')
+    plt.show()
+
+    # get test scores from trained model
+    test_y_pred = model(test_data)
+    test_scores, test_indexes = softmax_highest_score(test_y_pred)
+    plt.hist(np.array(test_indexes), bins=30, color='green')
+    plt.show()
+    print('--------')
+    print('Evaluation on entire test partition.')
+    # get results from test dataset and print results
+    results = eval.evaluate(data.test, test_scores, print_results=True)
+    filename = 'results_best_models/pointwise.json'
+    save_to_json(filename, results)
