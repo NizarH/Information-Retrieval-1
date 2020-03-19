@@ -74,9 +74,8 @@ class listWiseModel(nn.Module):
         if self.metric == "ERR":
             delta_irm_ij = ERR
 
-        DOC_COUNT = int(self.pairs/10)
         #as with pairwise decide on the number of the docs (instead of pairs) to generate from all docs
-        doc_selection = np.random.choice(self.scores.shape[0], DOC_COUNT)
+        doc_selection = np.random.choice(self.scores.shape[0], self.pairs)
         doc_labels = [float(target[i]) for i in doc_selection] #order the labels as a product of the chosen docs
         ideal_labels = np.sort(doc_labels)[::-1] #high to low, i.e the ideal order, needed for the for the nDCG formula
         ideal = DCG(ideal_labels)
@@ -122,7 +121,7 @@ class listWiseModel(nn.Module):
                 lambdarank += lambda_ij
 
             loss += lambdarank * delta_metric * s_i
-
+            print(loss)
             return loss
 
 
@@ -139,7 +138,7 @@ def trainModel(model, data, epochs, optimizer):
         loss = model.loss_function(labels)
         loss.backward()
         optimizer.step()
-        if epoch%10 == 0:
+        if epoch%100 == 0:
             print("validation ndcg at epoch " + str(epoch))
             model.eval()
             validation_scores = model.score(data.validation)
