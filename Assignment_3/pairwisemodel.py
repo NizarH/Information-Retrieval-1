@@ -38,7 +38,7 @@ class pairWiseModel(nn.Module):
 
 
     def calc_ranknet(self, s_i, s_j):
-        #computing cross entropy between desired probability and predicted probablity
+        #computing Pij, as seen in equation 1
         return 1 / (1 + torch.exp(-self.sigma * (s_i - s_j)))
 
     def loss_function(self, target):
@@ -53,22 +53,25 @@ class pairWiseModel(nn.Module):
             #scores for document i and j
             s_i = self.scores[i]
             s_j = self.scores[j]
-            print(self.scores.shape[0])
             #Sij is a element of {-1, 0, 1}, with -1 indicating that j is the more relevant document, 1 indicating i
             # is more relevant and 0 indicating equal relevancy.
             if target[i] > target[j]:
-                S = 1
+                Sij = 1
             elif target[i] == target[j]:
-                S = 0
+                Sij = 0
             else:
-                S = -1
+                Sij = -1
 
-            #save S in a tensor
-            S = torch.Tensor([S])
-            #calculate P using both document scores, with our earlier defined ranknet formula
+            Pbarij = int(0.5*(1+Sij))
+
+            #save  in a tensor
+            Pbarij = torch.Tensor([Pbarij])
+
+
+            #calculate P using both document scores, with our earlier defined formula (equation 1)
             P = self.calc_ranknet(s_i, s_j)
-            #get loss
-            loss += self.loss_fn(P, S)
+            #get loss, using Pbarij and Pij (equation 3) using the cross entropy cost function (2)
+            loss += self.loss_fn(P, Pbarij)
 
         return loss
 
@@ -99,7 +102,7 @@ def trainModel(model, data, epochs, optimizer):
 data = dataset.get_dataset().get_data_folds()[0]
 data.read_data()
 #define how many times the model will 'see'the dataset for learning, in the form of number of epochs
-epochs = 10
+epochs = 100
 #pairwise model:
 model = pairWiseModel(data.num_features, [10,10,10])
 #choose an optimizer (we choose adam for best performance)
